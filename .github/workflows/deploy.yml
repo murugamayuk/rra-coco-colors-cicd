@@ -1,7 +1,7 @@
 name: Deploy — COCO COLORS Infrastructure & Agents
 
 on:
-  push:
+  workflow_dispatch_disabled:
     branches: [main]
   workflow_dispatch:
     inputs:
