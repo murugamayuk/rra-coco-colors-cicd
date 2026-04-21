@@ -1,0 +1,105 @@
+name: CI — COCO COLORS Pipeline
+
+on:
+  push:
+    branches: [main, develop, feature/**]
+  pull_request:
+    branches: [main]
+
+env:
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  # ── JOB 1: Lint & Static Analysis ──────────────────────────────────────────
+  lint:
+    name: Lint & Static Analysis
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install lint dependencies
+        run: |
+          pip install flake8 black isort mypy
+
+      - name: Black formatting check
+        run: black --check pipeline/ agents/ evals/ tests/
+
+      - name: isort import order check
+        run: isort --check-only pipeline/ agents/ evals/ tests/
+
+      - name: Flake8 lint
+        run: flake8 pipeline/ agents/ evals/ tests/ --max-line-length 120
+
+  # ── JOB 2: Unit Tests ──────────────────────────────────────────────────────
+  unit-tests:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run unit tests
+        run: |
+          pytest tests/unit/ -v \
+            --tb=short \
+            --cov=pipeline \
+            --cov-report=xml \
+            --cov-report=term-missing
+
+      - name: Upload coverage
+        uses: codecov/codecov-action@v4
+        with:
+          file: ./coverage.xml
+
+  # ── JOB 3: Eval Gate ───────────────────────────────────────────────────────
+  eval-gate:
+    name: Eval Gate — Quality Threshold
+    runs-on: ubuntu-latest
+    needs: unit-tests
+    environment: staging
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run eval gate against simulated data
+        env:
+          FOUNDRY_ENDPOINT: ${{ secrets.FOUNDRY_ENDPOINT }}
+          FOUNDRY_API_KEY: ${{ secrets.FOUNDRY_API_KEY }}
+        run: |
+          python evals/run_evals.py \
+            --dataset evals/datasets/simulated_v1.jsonl \
+            --threshold-groundedness 0.80 \
+            --threshold-task-completion 0.90 \
+            --threshold-relevance 0.80 \
+            --fail-on-breach \
+            --output evals/results/ci_run.json
+
+      - name: Upload eval results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: eval-results-${{ github.run_id }}
+          path: evals/results/ci_run.json

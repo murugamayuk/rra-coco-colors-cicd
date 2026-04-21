@@ -1,0 +1,81 @@
+name: Nightly Eval — COCO COLORS Quality Monitor
+
+on:
+  schedule:
+    - cron: '0 6 * * *'   # 6am UTC = 10pm PST (after your 3am build window)
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  nightly-eval:
+    name: Full Evaluation Suite
+    runs-on: ubuntu-latest
+    environment: staging
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run full eval suite
+        env:
+          FOUNDRY_ENDPOINT: ${{ secrets.FOUNDRY_ENDPOINT }}
+          FOUNDRY_API_KEY: ${{ secrets.FOUNDRY_API_KEY }}
+        run: |
+          python evals/run_evals.py \
+            --dataset evals/datasets/simulated_v1.jsonl \
+            --full \
+            --output evals/results/nightly_${{ github.run_id }}.json
+
+      - name: Check scoring consistency
+        env:
+          FOUNDRY_ENDPOINT: ${{ secrets.FOUNDRY_ENDPOINT }}
+          FOUNDRY_API_KEY: ${{ secrets.FOUNDRY_API_KEY }}
+        run: |
+          python evals/consistency_check.py \
+            --candidate-id 4744211 \
+            --runs 3 \
+            --max-variance 10
+
+      - name: Check hallucination rate
+        run: |
+          python evals/hallucination_check.py \
+            --results evals/results/nightly_${{ github.run_id }}.json \
+            --threshold 0.05
+
+      - name: Upload nightly results
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-eval-${{ github.run_id }}
+          path: evals/results/nightly_${{ github.run_id }}.json
+
+      - name: Post nightly report to Slack
+        uses: slackapi/slack-github-action@v1.27.0
+        if: always()
+        with:
+          payload: |
+            {
+              "text": "COCO COLORS Nightly Eval Complete",
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "*COCO COLORS Nightly Eval*\nDate: ${{ github.run_id }}\nStatus: ${{ job.status == 'success' && '✅ All thresholds passed' || '⚠️ Check results' }}"
+                  }
+                }
+              ]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK

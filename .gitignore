@@ -1,0 +1,41 @@
+# Environment
+.env
+.env.*
+*.env.txt
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+
+# Terraform
+infra/terraform/.terraform/
+infra/terraform/*.tfstate
+infra/terraform/*.tfstate.backup
+infra/terraform/tfplan
+infra/terraform/.terraform.lock.hcl
+
+# Secrets
+*pwd*.txt
+*.pem
+*.key
+*.p12
+
+# Results (local only)
+evals/results/
+integration_result.json
+coverage.xml
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db

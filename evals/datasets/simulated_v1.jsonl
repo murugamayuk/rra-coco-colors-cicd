@@ -1,0 +1,5 @@
+{"candidate_id": "4744211", "role": "Spec-2602-214NA", "expected_tier": "Strong Yes", "expected_score_min": 65, "expected_score_max": 85, "test_case": "primary_candidate_cfo"}
+{"candidate_id": "4744211", "role": "Spec-2602-214NA", "expected_tier": "Strong Yes", "expected_score_min": 65, "expected_score_max": 85, "test_case": "consistency_run_2"}
+{"candidate_id": "4744211", "role": "Spec-2602-214NA", "expected_tier": "Strong Yes", "expected_score_min": 65, "expected_score_max": 85, "test_case": "consistency_run_3"}
+{"candidate_id": "SIM-002", "role": "Spec-2602-214NA", "expected_tier": "Maybe", "expected_score_min": 40, "expected_score_max": 65, "test_case": "partial_match_candidate"}
+{"candidate_id": "SIM-003", "role": "Spec-2602-214NA", "expected_tier": "No", "expected_score_min": 0, "expected_score_max": 40, "test_case": "weak_candidate"}

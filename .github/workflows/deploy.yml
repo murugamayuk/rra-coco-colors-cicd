@@ -1,0 +1,234 @@
+name: Deploy — COCO COLORS Infrastructure & Agents
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Target environment
+        required: true
+        default: staging
+        type: choice
+        options: [staging, production]
+
+permissions:
+  id-token: write    # Required for OIDC
+  contents: read
+
+env:
+  PYTHON_VERSION: "3.12"
+  TF_VERSION: "1.7.0"
+  ARM_USE_OIDC: "true"
+
+jobs:
+  # ── JOB 1: Terraform Plan ──────────────────────────────────────────────────
+  terraform-plan:
+    name: Terraform Plan
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment || 'staging' }}
+    outputs:
+      plan-exit-code: ${{ steps.plan.outputs.exit-code }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure Login via OIDC
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Terraform Init
+        working-directory: infra/terraform
+        run: |
+          terraform init \
+            -backend-config="resource_group_name=${{ secrets.TF_STATE_RG }}" \
+            -backend-config="storage_account_name=${{ secrets.TF_STATE_SA }}" \
+            -backend-config="container_name=tfstate" \
+            -backend-config="key=coco-colors-${{ github.event.inputs.environment || 'staging' }}.tfstate"
+
+      - name: Terraform Validate
+        working-directory: infra/terraform
+        run: terraform validate
+
+      - name: Terraform Plan
+        id: plan
+        working-directory: infra/terraform
+        env:
+          TF_VAR_environment: ${{ github.event.inputs.environment || 'staging' }}
+          TF_VAR_foundry_endpoint: ${{ secrets.FOUNDRY_ENDPOINT }}
+        run: |
+          terraform plan \
+            -out=tfplan \
+            -detailed-exitcode
+        continue-on-error: true
+
+      - name: Upload plan
+        uses: actions/upload-artifact@v4
+        with:
+          name: tfplan-${{ github.run_id }}
+          path: infra/terraform/tfplan
+
+  # ── JOB 2: Terraform Apply ─────────────────────────────────────────────────
+  terraform-apply:
+    name: Terraform Apply
+    runs-on: ubuntu-latest
+    needs: terraform-plan
+    if: needs.terraform-plan.outputs.plan-exit-code == 2
+    environment: ${{ github.event.inputs.environment || 'staging' }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure Login via OIDC
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Terraform Init
+        working-directory: infra/terraform
+        run: |
+          terraform init \
+            -backend-config="resource_group_name=${{ secrets.TF_STATE_RG }}" \
+            -backend-config="storage_account_name=${{ secrets.TF_STATE_SA }}" \
+            -backend-config="container_name=tfstate" \
+            -backend-config="key=coco-colors-${{ github.event.inputs.environment || 'staging' }}.tfstate"
+
+      - name: Download plan
+        uses: actions/download-artifact@v4
+        with:
+          name: tfplan-${{ github.run_id }}
+          path: infra/terraform
+
+      - name: Terraform Apply
+        working-directory: infra/terraform
+        run: terraform apply tfplan
+
+  # ── JOB 3: Deploy Agents ───────────────────────────────────────────────────
+  deploy-agents:
+    name: Deploy Foundry Agents
+    runs-on: ubuntu-latest
+    needs: terraform-apply
+    environment: ${{ github.event.inputs.environment || 'staging' }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Deploy agents to Foundry
+        env:
+          FOUNDRY_ENDPOINT: ${{ secrets.FOUNDRY_ENDPOINT }}
+          FOUNDRY_API_KEY: ${{ secrets.FOUNDRY_API_KEY }}
+          ENVIRONMENT: ${{ github.event.inputs.environment || 'staging' }}
+        run: |
+          python pipeline/deploy_agents.py \
+            --environment $ENVIRONMENT \
+            --agents-dir agents/
+
+      - name: Smoke test deployed agents
+        env:
+          FOUNDRY_ENDPOINT: ${{ secrets.FOUNDRY_ENDPOINT }}
+          FOUNDRY_API_KEY: ${{ secrets.FOUNDRY_API_KEY }}
+        run: |
+          python tests/smoke_test.py \
+            --candidate-id 4744211 \
+            --position-spec Spec-2602-214NA
+
+  # ── JOB 4: Integration Test ────────────────────────────────────────────────
+  integration-test:
+    name: Integration Test — Full Pipeline
+    runs-on: ubuntu-latest
+    needs: deploy-agents
+    environment: ${{ github.event.inputs.environment || 'staging' }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run full concurrent pipeline
+        env:
+          FOUNDRY_ENDPOINT: ${{ secrets.FOUNDRY_ENDPOINT }}
+          FOUNDRY_API_KEY: ${{ secrets.FOUNDRY_API_KEY }}
+        run: |
+          python pipeline/main.py \
+            --candidate-id 4744211 \
+            --position-spec Spec-2602-214NA \
+            --output integration_result.json
+
+      - name: Validate output schema
+        run: |
+          python tests/validate_output.py \
+            --result integration_result.json \
+            --schema tests/schemas/score_output.json
+
+      - name: Assert score in acceptable range
+        run: |
+          python tests/assert_score.py \
+            --result integration_result.json \
+            --min-score 30 \
+            --max-score 90
+
+      - name: Upload integration results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: integration-results-${{ github.run_id }}
+          path: integration_result.json
+
+  # ── JOB 5: Notify ──────────────────────────────────────────────────────────
+  notify:
+    name: Notify Deployment
+    runs-on: ubuntu-latest
+    needs: [integration-test]
+    if: always()
+
+    steps:
+      - name: Post to Slack
+        uses: slackapi/slack-github-action@v1.27.0
+        with:
+          payload: |
+            {
+              "text": "COCO COLORS Deploy: ${{ needs.integration-test.result == 'success' && '✅ SUCCESS' || '❌ FAILED' }}",
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "*COCO COLORS Pipeline Deploy*\nEnvironment: `${{ github.event.inputs.environment || 'staging' }}`\nCommit: `${{ github.sha }}`\nStatus: ${{ needs.integration-test.result == 'success' && '✅ SUCCESS' || '❌ FAILED' }}"
+                  }
+                }
+              ]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK
