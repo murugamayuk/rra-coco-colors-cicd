@@ -42,7 +42,7 @@ jobs:
         run: pytest tests/unit/ -v
 
   eval-gate:
-    name: Eval Gate
+    name: Eval Gate — Live Agent Call
     runs-on: ubuntu-latest
     needs: unit-tests
     steps:
@@ -52,5 +52,19 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
-      - name: Run eval stub
-        run: python evals/run_evals.py --dataset evals/datasets/simulated_v1.jsonl
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Run live eval
+        env:
+          FOUNDRY_ENDPOINT: ${{ secrets.FOUNDRY_ENDPOINT }}
+          FOUNDRY_API_KEY: ${{ secrets.FOUNDRY_API_KEY }}
+        run: |
+          python evals/run_evals.py \
+            --dataset evals/datasets/simulated_v1.jsonl \
+            --output evals/results/ci_run.json
+      - name: Upload eval results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: eval-results-${{ github.run_id }}
+          path: evals/results/ci_run.json
