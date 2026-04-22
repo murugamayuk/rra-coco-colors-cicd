@@ -1,6 +1,5 @@
 terraform {
   required_version = ">= 1.7.0"
-
   required_providers {
     azurerm = {
       source  = "hashicorp/azurerm"
@@ -11,12 +10,11 @@ terraform {
       version = "~> 1.13"
     }
   }
-
   backend "azurerm" {
     # Configured via -backend-config in CI/CD
-    # resource_group_name  = set via secret
-    # storage_account_name = set via secret
-    # container_name       = "tfstate"
+    # resource_group_name  = set via TF_STATE_RG secret
+    # storage_account_name = set via TF_STATE_SA secret
+    # container_name       = set via TF_STATE_CONTAINER secret (value: "tfstate")
     # key                  = "coco-colors-{env}.tfstate"
   }
 }
@@ -41,8 +39,7 @@ resource "azurerm_search_service" "candidate_search" {
   resource_group_name = data.azurerm_resource_group.main.name
   location            = data.azurerm_resource_group.main.location
   sku                 = var.environment == "production" ? "basic" : "free"
-
-  tags = local.common_tags
+  tags                = local.common_tags
 }
 
 # ── STORAGE (Bronze / Silver / Gold medallion) ───────────────────────────────
@@ -52,8 +49,7 @@ resource "azurerm_storage_account" "pipeline" {
   location                 = data.azurerm_resource_group.main.location
   account_tier             = "Standard"
   account_replication_type = "LRS"
-
-  tags = local.common_tags
+  tags                     = local.common_tags
 }
 
 resource "azurerm_storage_container" "bronze" {
@@ -87,8 +83,7 @@ resource "azurerm_key_vault" "pipeline" {
   location            = data.azurerm_resource_group.main.location
   tenant_id           = var.tenant_id
   sku_name            = "standard"
-
-  tags = local.common_tags
+  tags                = local.common_tags
 }
 
 # ── LOCALS ────────────────────────────────────────────────────────────────────
@@ -97,7 +92,7 @@ locals {
     project     = "coco-colors"
     environment = var.environment
     managed_by  = "terraform"
-    owner       = "murkar@russellreynolds.com"
+    owner       = "mayuksacred@gmail.com"
   }
 }
 
