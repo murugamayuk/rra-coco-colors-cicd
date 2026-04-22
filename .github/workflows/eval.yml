@@ -29,7 +29,8 @@ jobs:
 
       - name: Run full eval suite
         env:
-          FOUNDRY_ENDPOINT: ${{ secrets.FOUNDRY_ENDPOINT }}
+          PROJECT_ENDPOINT:     ${{ secrets.FOUNDRY_ENDPOINT }}
+          FOUNDRY_PROJECT_NAME: proj-default
           FOUNDRY_API_KEY: ${{ secrets.FOUNDRY_API_KEY }}
         run: |
           python evals/run_evals.py \
@@ -39,7 +40,8 @@ jobs:
 
       - name: Check scoring consistency
         env:
-          FOUNDRY_ENDPOINT: ${{ secrets.FOUNDRY_ENDPOINT }}
+          PROJECT_ENDPOINT:     ${{ secrets.FOUNDRY_ENDPOINT }}
+          FOUNDRY_PROJECT_NAME: proj-default
           FOUNDRY_API_KEY: ${{ secrets.FOUNDRY_API_KEY }}
         run: |
           python evals/consistency_check.py \

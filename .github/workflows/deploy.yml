@@ -1,8 +1,6 @@
 name: Deploy — COCO COLORS Infrastructure & Agents
 
 on:
-  workflow_dispatch_disabled:
-    branches: [main]
   workflow_dispatch:
     inputs:
       environment:
@@ -15,6 +13,10 @@ on:
 permissions:
   id-token: write    # Required for OIDC
   contents: read
+
+concurrency:
+  group: deploy-${{ github.event.inputs.environment || 'staging' }}
+  cancel-in-progress: false   # never cancel a running apply
 
 env:
   PYTHON_VERSION: "3.12"
@@ -63,14 +65,20 @@ jobs:
         working-directory: infra/terraform
         env:
           TF_VAR_environment: ${{ github.event.inputs.environment || 'staging' }}
-          TF_VAR_foundry_endpoint: ${{ secrets.FOUNDRY_ENDPOINT }}
+          TF_VAR_tenant_id: ${{ secrets.AZURE_TENANT_ID }}
+          TF_VAR_resource_group_name: rg-mayuksacred-5599
         run: |
-          terraform plan \
-            -out=tfplan \
-            -detailed-exitcode
-        continue-on-error: true
+          set +e
+          terraform plan -out=tfplan -detailed-exitcode
+          EXIT=$?
+          echo "exit-code=$EXIT" >> "$GITHUB_OUTPUT"
+          echo "Plan exit code: $EXIT (0=no changes, 1=error, 2=changes)"
+          # Fail the step only on genuine error
+          if [ $EXIT -eq 1 ]; then exit 1; fi
+          exit 0
 
       - name: Upload plan
+        if: steps.plan.outputs.exit-code == '2'
         uses: actions/upload-artifact@v4
         with:
           name: tfplan-${{ github.run_id }}
@@ -81,7 +89,7 @@ jobs:
     name: Terraform Apply
     runs-on: ubuntu-latest
     needs: terraform-plan
-    if: needs.terraform-plan.outputs.plan-exit-code == 2
+    if: needs.terraform-plan.outputs.plan-exit-code == '2'
     environment: ${{ github.event.inputs.environment || 'staging' }}
 
     steps:
@@ -116,13 +124,18 @@ jobs:
 
       - name: Terraform Apply
         working-directory: infra/terraform
-        run: terraform apply tfplan
+        run: terraform apply -auto-approve tfplan
 
   # ── JOB 3: Deploy Agents ───────────────────────────────────────────────────
   deploy-agents:
     name: Deploy Foundry Agents
     runs-on: ubuntu-latest
     needs: terraform-apply
+    # Run even if apply was skipped because there were no infra changes
+    if: |
+      always() &&
+      (needs.terraform-apply.result == 'success' ||
+       needs.terraform-apply.result == 'skipped')
     environment: ${{ github.event.inputs.environment || 'staging' }}
 
     steps:
@@ -137,11 +150,23 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      - name: Check for agents to deploy
+        id: check_agents
+        run: |
+          if [ -z "$(ls -A agents/ 2>/dev/null)" ]; then
+            echo "has_agents=false" >> "$GITHUB_OUTPUT"
+            echo "⚠️  agents/ is empty — skipping Foundry deployment"
+            echo "    Agents are assumed to be managed directly in Foundry UI"
+          else
+            echo "has_agents=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Deploy agents to Foundry
+        if: steps.check_agents.outputs.has_agents == 'true'
         env:
-          FOUNDRY_ENDPOINT: ${{ secrets.FOUNDRY_ENDPOINT }}
-          FOUNDRY_API_KEY: ${{ secrets.FOUNDRY_API_KEY }}
-          ENVIRONMENT: ${{ github.event.inputs.environment || 'staging' }}
+          PROJECT_ENDPOINT: ${{ secrets.FOUNDRY_ENDPOINT }}
+          FOUNDRY_API_KEY:  ${{ secrets.FOUNDRY_API_KEY }}
+          ENVIRONMENT:      ${{ github.event.inputs.environment || 'staging' }}
         run: |
           python pipeline/deploy_agents.py \
             --environment $ENVIRONMENT \
@@ -149,8 +174,8 @@ jobs:
 
       - name: Smoke test deployed agents
         env:
-          FOUNDRY_ENDPOINT: ${{ secrets.FOUNDRY_ENDPOINT }}
-          FOUNDRY_API_KEY: ${{ secrets.FOUNDRY_API_KEY }}
+          PROJECT_ENDPOINT: ${{ secrets.FOUNDRY_ENDPOINT }}
+          FOUNDRY_API_KEY:  ${{ secrets.FOUNDRY_API_KEY }}
         run: |
           python tests/smoke_test.py \
             --candidate-id 4744211 \
@@ -175,10 +200,10 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Run full concurrent pipeline
+      - name: Run full pipeline
         env:
-          FOUNDRY_ENDPOINT: ${{ secrets.FOUNDRY_ENDPOINT }}
-          FOUNDRY_API_KEY: ${{ secrets.FOUNDRY_API_KEY }}
+          PROJECT_ENDPOINT: ${{ secrets.FOUNDRY_ENDPOINT }}
+          FOUNDRY_API_KEY:  ${{ secrets.FOUNDRY_API_KEY }}
         run: |
           python pipeline/main.py \
             --candidate-id 4744211 \
@@ -214,6 +239,7 @@ jobs:
 
     steps:
       - name: Post to Slack
+        if: env.SLACK_WEBHOOK_URL != ''
         uses: slackapi/slack-github-action@v1.27.0
         with:
           payload: |

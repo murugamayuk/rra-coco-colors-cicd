@@ -46,6 +46,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: unit-tests
     steps:
+      
       - uses: actions/checkout@v4
       # Add this step before Run live eval in ci.yml:
       - name: Create results dir
@@ -60,7 +61,8 @@ jobs:
         run: pip install -r requirements.txt
       - name: Run live eval
         env:
-          FOUNDRY_ENDPOINT: ${{ secrets.FOUNDRY_ENDPOINT }}
+          PROJECT_ENDPOINT: ${{ secrets.FOUNDRY_ENDPOINT }}
+          FOUNDRY_PROJECT_NAME: proj-default
           FOUNDRY_API_KEY: ${{ secrets.FOUNDRY_API_KEY }}
         run: |
           python evals/run_evals.py \
@@ -72,3 +74,12 @@ jobs:
         with:
           name: eval-results-${{ github.run_id }}
           path: evals/results/ci_run.json
+
+      - name: Debug — verify endpoint shape
+        env:
+          PROJECT_ENDPOINT:     ${{ secrets.FOUNDRY_ENDPOINT }}
+          FOUNDRY_PROJECT_NAME: proj-default
+        run: |
+          echo "Length: ${#PROJECT_ENDPOINT}"
+          echo "Starts with: ${PROJECT_ENDPOINT:0:30}..."
+          echo "Contains /api/projects/: $(echo $PROJECT_ENDPOINT | grep -c '/api/projects/')"    
