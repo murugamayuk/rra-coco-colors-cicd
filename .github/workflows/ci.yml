@@ -47,6 +47,10 @@ jobs:
     needs: unit-tests
     steps:
       - uses: actions/checkout@v4
+      # Add this step before Run live eval in ci.yml:
+      - name: Create results dir
+        run: mkdir -p evals/results
+    
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
